@@ -1,0 +1,55 @@
+#! /bin/bash
+#Usage: assembly_shasta [MERGED_FASTQ_ONT] [R12_NGS] [OUT_DIR] [NUM_OF_THREAD]
+
+READS=$1
+R12=$2
+DEST=$3
+THRDS=$4
+
+SAMPLE=$(basename "$1" .fastq.gz)
+
+echo "EXECUTING $READS AND $R12" ;
+echo "SAMPLE ID : $SAMPLE" ; 
+
+#Primary assembly with Shasta
+SHASTA="$DEST"/$SAMPLE/shasta && \
+mkdir -p "$SHASTA" &&
+shasta --memoryMode filesystem  --input $READS --memoryBacking 2M --Reads.minReadLength 1000 --assemblyDirectory "$SHASTA"/primary_assembly --config Nanopore-Oct2021 --command cleanupBinaryData && \
+
+CONTIGS="$SHASTA"/primary_assembly/assembly.fasta ;
+
+#SR-POLISH
+#minimap2 alignment for short-read polishing
+MINIMAP_SR="$SHASTA"/sr-polish/minimap2 ;
+mkdir -p "$MINIMAP_SR" ;
+minimap2 -x sr -t $THRDS $CONTIGS $R12 > "$MINIMAP_SR"/$SAMPLE.mapped-sr.paf ;
+OVERLAPS_SR="$MINIMAP_SR"/$SAMPLE.mapped-sr.paf ;
+
+#Short-read polishing with racon
+RACON_SR="$SHASTA"/sr-polish/racon ;
+mkdir -p "$RACON_SR" ;
+racon -t $THRDS $READS $OVERLAPS_SR $CONTIGS > "$RACON_SR"/racon_$SAMPLE.fasta && \
+
+#Short-read polishing with medaka
+MEDAKA_SR="$SHASTA"/sr-polish/medaka ;
+mkdir -p "$MEDAKA_SR" ;
+medaka_consensus -i $READS -d "$RACON_SR"/racon_$SAMPLE.fasta -o $MEDAKA_SR -t $THRDS -m r941_prom_hac_g507;
+
+#LR-POLISH
+#minimap2 alignment for long-read polishing
+#on using map-ont vs ava-ont: https://github.com/BGI-Qingdao/TGS-GapCloser/issues/8. tl;dr: use ava-ont for noisy low-coverage reads
+MINIMAP_LR="$SHASTA"/lr-polish/minimap2 ;
+mkdir -p "$MINIMAP_LR" ;
+minimap2 -x map-ont -t $THRDS $CONTIGS $READS > "$MINIMAP_LR"/$SAMPLE.mapped-lr.paf ;
+OVERLAPS_LR="$MINIMAP_LR"/$SAMPLE.mapped-lr.paf ;
+
+#Long-read polishing with racon
+RACON_LR="$SHASTA"/lr-polish/racon ;
+mkdir -p "$RACON_LR" ;
+racon -t $THRDS $READS $OVERLAPS_LR $CONTIGS > "$RACON_LR"/racon_$SAMPLE.fasta && \
+
+#Long-read polishing with medaka
+MEDAKA_LR="$SHASTA"/lr-polish/medaka ;
+mkdir -p "$MEDAKA_LR" ;
+medaka_consensus -i $READS -d "$RACON_LR"/racon_$SAMPLE.fasta -o $MEDAKA_LR -t $THRDS -m r941_prom_hac_g507;
+

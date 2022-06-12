@@ -1,0 +1,38 @@
+#! /bin/bash
+#Usage: assembly_flye_hypo [MERGED_FASTQ_ONT] [R12_NGS] [OUT_DIR] [NUM_OF_THREAD]
+
+READS=$1
+R12=$2
+DEST=$3
+THRDS=$4
+
+SAMPLE=$(basename "$1" .fastq.gz)
+
+echo "EXECUTING $READS AND $R12" ;
+echo "SAMPLE ID : $SAMPLE" ; 
+
+#Primary assembly with Flye
+FLYE="$DEST"/$SAMPLE/flye && \
+mkdir -p "$FLYE" &&
+flye --nano-hq $READS --out-dir "$FLYE"/primary_assembly --threads $THRDS  && \
+
+CONTIGS="$FLYE"/primary_assembly/assembly.fasta ;
+
+#mapping short reads
+MINIMAP_SR="$FLYE"/sr-polish/minimap2 ;
+minimap2 --secondary=no --MD -ax sr -t $THRDS $CONTIGS $R12 | samtools view -Sb - > "$MINIMAP_SR"/$SAMPLE.mapped-sr.bam &&
+samtools sort -@ $THRDS -o $MINIMAP_SR/$SAMPLE.mapped-sr.sorted.bam $MINIMAP_SR/$SAMPLE.mapped-sr.bam &&
+samtools index $MINIMAP_SR/$SAMPLE.mapped-sr.sorted.bam &&
+rm $MINIMAP_SR/$SAMPLE.mapped-sr.bam ;
+
+#mapping long reads
+MINIMAP_LR="$FLYE"/lr-polish/minimap2
+minimap2 --secondary=no --MD -ax map-ont -t $THRDS $DRAFT $LONGR | samtools view -Sb - > $MINIMAP_LR/$SAMPLE.mapped-lg.bam &&
+samtools sort -@ $THRDS -o $MINIMAP_LR/$SAMPLE.mapped-lg.sorted.bam $MINIMAP_LR/$SAMPLE.mapped-lg.bam &&
+samtools index $MINIMAP_LR/$SAMPLE.mapped-lg.sorted.bam &&
+rm $MINIMAP_LR/$SAMPLE.mapped-lg.bam ;
+
+#running hypo
+echo -e "$R1\n$R2" > $MINIMAP_SR/$SAMPLE.il_names.txt &&
+hypo -d $DRAFT -r @$MINIMAP_SR/$SAMPLE.il_names.txt -s 3g -c 55 -b $MINIMAP_SR/$SAMPLE.mapped-sr.sorted.bam -B $MINIMAP_LR/$SAMPLE.mapped-lg.sorted.bam -p 96 -t $THRDS -o $FLYE/sr-polish/hypo/$SAMPLE.hypo.h2.fa
+
